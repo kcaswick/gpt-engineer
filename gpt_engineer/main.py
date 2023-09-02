@@ -80,9 +80,10 @@ def main(
     )
 
     if steps_config not in [
+        StepsConfig.CHOICE_LOOP,
+        StepsConfig.EVALUATE,
         StepsConfig.EXECUTE_ONLY,
         StepsConfig.USE_FEEDBACK,
-        StepsConfig.EVALUATE,
     ]:
         archive(dbs)
 
