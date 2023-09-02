@@ -51,6 +51,117 @@ def simple_gen(ai: AI, dbs: DBs) -> List[dict]:
     return messages
 
 
+def ask_feedback(ai: AI, dbs: DBs) -> List[dict]:
+    """Ask the user for feedback on the generated program, and save it to the feedback
+    file"""
+    review = dbs.memory.get("review", None)
+
+    print("The most recent review was: " + review)
+    print()
+    user_input = input("Press enter to use the review as feedback, or type a new one: ")
+
+    dbs.input["feedback"] = user_input if user_input else review
+    return []
+
+
+def choice_input(
+    ai: AI, dbs: DBs, choices: List[str], examples: List[tuple], text_input: str
+) -> str:
+    """Determine what the user selected from a menu of choices"""
+    choices_str = "\n".join(choices)
+    examples_str = ""
+    # if examples and len(examples) > 0:
+    #     examples_str = "Examples:\n" + \
+    #         "\n".join(
+    #             [f"Input: {sentence}\nOutput: [{{'C': '{label}'}}]" for sentence,
+    #               label in examples])
+    messages = ai.start(
+        f"""You are a highly intelligent and accurate Multiclass Classification system.
+        You take Passage as input and classify that as one of the following appropriate
+        Categories:
+        {choices_str}
+        If the input does not belong to any of the categories, output None.
+        Your output format is only [{{'C': Appropriate Category from the list of provided
+        Categories}}] form, no other form.
+
+        {examples_str}
+        """,
+        f"""Input: { text_input }
+        Output:
+        """,
+        step_name=curr_fn(),
+    )
+    raw_result = messages[-1]["content"]
+    try:
+        result = json.loads(raw_result)
+    except Exception as ex:
+        print("Error parsing result: " + raw_result)
+        print(ex)
+        result = {}
+    return result.get("C", None)
+
+
+def choice_loop(ai: AI, dbs: DBs) -> List[dict]:
+    """Ask the user to choose the steps to run, and keep looping until they say they're
+    done"""
+
+    # Get all the step keys that start with LOOP_BODY_
+    loop_body_keys = [key for key in STEPS.keys() if key.startswith(LOOP_BODY_PREFIX)]
+
+    # Keep looping until the user says they're done
+    while True:
+        body_steps = None
+        while not body_steps:
+            # Give the user the list to choose from, and ask them to choose
+            print("Choose a step to run:")
+            choices = []
+            for i, key in enumerate(loop_body_keys):
+                choice = f"{i+1}. {key.removeprefix(LOOP_BODY_PREFIX).title()}"
+                print(choice)
+                choices.append(choice)
+            print()
+
+            user_input = input(
+                "Enter a number to choose a step, or enter 'done' to finish: "
+            )
+            print()
+
+            # If they say they're done, break out of the loop
+            if user_input == "done" or user_input == "quit":
+                return []
+
+            # If they enter a number, run the corresponding step
+            if user_input.isdigit():
+                step_index = int(user_input) - 1
+                step_key = loop_body_keys[step_index]
+                body_steps = STEPS.get(step_key, [])
+
+            # If they enter something else, ask the AI to classify it
+            else:
+                user_input = choice_input(
+                    ai,
+                    dbs,
+                    choices,
+                    [("feeback", 1), ("quux", None), ("run", "Evaluate")],
+                    user_input,
+                )
+
+                # If the AI says it doesn't understand, ask the user to clarify
+                if user_input is None:
+                    print("I don't understand. Please clarify.")
+                    print()
+                else:
+                    step_index = int(user_input) - 1
+                    step_key = loop_body_keys[step_index]
+                    body_steps = STEPS.get(step_key, [])
+                    break
+
+        # Run the steps they chose
+        for step in body_steps:
+            messages = step(ai, dbs)
+            dbs.logs[step.__name__] = json.dumps(messages)
+
+
 def clarify(ai: AI, dbs: DBs) -> List[dict]:
     """
     Ask the user if they want to clarify anything and save the results to the workspace
@@ -273,6 +384,9 @@ def human_review(ai: AI, dbs: DBs):
     return []
 
 
+LOOP_BODY_PREFIX = "loop_body_"
+
+
 class Config(str, Enum):
     DEFAULT = "default"
     BENCHMARK = "benchmark"
@@ -284,6 +398,9 @@ class Config(str, Enum):
     EXECUTE_ONLY = "execute_only"
     EVALUATE = "evaluate"
     USE_FEEDBACK = "use_feedback"
+    CHOICE_LOOP = "choice_loop"
+    LOOP_BODY_FEEDBACK = LOOP_BODY_PREFIX + "feedback"
+    LOOP_BODY_EVALUATE = LOOP_BODY_PREFIX + "evaluate"
 
 
 # Different configs of what steps to run
@@ -334,7 +451,10 @@ STEPS = {
     Config.USE_FEEDBACK: [use_feedback, gen_entrypoint, execute_entrypoint, human_review],
     Config.EXECUTE_ONLY: [execute_entrypoint],
     Config.EVALUATE: [execute_entrypoint, human_review],
+    Config.CHOICE_LOOP: [choice_loop],
+    Config.LOOP_BODY_EVALUATE: [execute_entrypoint, human_review],
 }
+STEPS[Config.LOOP_BODY_FEEDBACK] = [ask_feedback] + STEPS[Config.USE_FEEDBACK]
 
 # Future steps that can be added:
 # run_tests_and_fix_files
